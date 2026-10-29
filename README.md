@@ -104,6 +104,13 @@ Pushing a `v*` tag builds every installer on GitHub Actions and attaches it to t
 
 To rebuild the assets of a release that already exists: `gh workflow run installers.yml -f tag=v1.6.0`.
 
+Each release also carries `SHA256SUMS.txt`, and the same hashes are appended to the release notes, so a download can be checked before it is trusted:
+
+```bash
+shasum -a 256 ReelHouse-1.6.0-arm64.dmg                  # macOS
+certutil -hashfile "ReelHouse Setup 1.6.0.exe" SHA256   # Windows
+```
+
 Each macOS architecture is built on a matching runner because `ffmpeg-static` and `@ffprobe-installer` install the binary for the machine they install on: an Intel DMG built on Apple silicon would ship an arm64 FFmpeg, and transcoding would fail on the very Macs it targets. The workflow mounts the DMG it is about to publish and fails unless the app, FFmpeg and ffprobe all match the runner's architecture.
 
 ---
