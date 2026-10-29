@@ -88,7 +88,7 @@ Notes:
 - Desktop data lives in the platform app-data folder under `…/ReelHouse/data`, separate from the CLI (`~/Library/Application Support/ReelHouse` on macOS, `%APPDATA%\ReelHouse` on Windows).
 - Build Windows installers on Windows for the smoothest result; cross-building from macOS needs Wine for NSIS.
 - `npm run dist:mac` builds both architectures on one machine, but only the host architecture gets a matching FFmpeg — use the release workflow below when publishing.
-- Unpacked macOS builds are unsigned. Opening them on another Mac requires right-click → Open, or signing with your own Developer ID.
+- Unpacked macOS builds are unsigned and un-notarised. Opening one on another Mac requires right-click → Open, or a release build signed with the Developer ID configured below.
 - Menu shortcuts: `Cmd/Ctrl+Shift+R` rescans the library, `Cmd/Ctrl+,` opens Settings; reload, zoom and fullscreen are in the View menu.
 - The desktop bundle carries its own FFmpeg (~50 MB per platform), so MKV/HEVC/AVI playback needs nothing installed. The binaries are unpacked from the app bundle and executed locally.
 
@@ -112,6 +112,40 @@ certutil -hashfile "ReelHouse Setup 1.6.0.exe" SHA256   # Windows
 ```
 
 Each macOS architecture is built on a matching runner because `ffmpeg-static` and `@ffprobe-installer` install the binary for the machine they install on: an Intel DMG built on Apple silicon would ship an arm64 FFmpeg, and transcoding would fail on the very Macs it targets. The workflow mounts the DMG it is about to publish and fails unless the app, FFmpeg and ffprobe all match the runner's architecture.
+
+### Code signing
+
+Signing is driven entirely by repository secrets (Settings → Secrets and variables → Actions). No certificate, password or key is ever committed.
+
+| Secret | What it is | If it is not set |
+|---|---|---|
+| `MAC_CSC_LINK` | Developer ID Application certificate, `.p12` exported from Keychain, base64 | macOS DMGs ship unsigned |
+| `MAC_CSC_KEY_PASSWORD` | Password for that `.p12` | — |
+| `APPLE_ID` | Apple ID used with the notary service | app is signed but not notarised |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for that Apple ID | notarisation fails the build |
+| `APPLE_TEAM_ID` | 10-character team ID | notarisation fails the build |
+| `WIN_CSC_LINK` | Authenticode certificate, `.pfx` or `.p12`, base64 | Windows installers ship unsigned |
+| `WIN_CSC_KEY_PASSWORD` | Password for that certificate | — |
+
+Export the certificate from Keychain Access (*My Certificates* → your *Developer ID Application* identity → Export…), then base64 it into the secret:
+
+```bash
+base64 -i DeveloperID.p12 | pbcopy     # paste as MAC_CSC_LINK
+base64 -i authenticode.pfx | pbcopy    # paste as WIN_CSC_LINK
+```
+
+The three Apple values are all-or-nothing: setting only some of them fails the build instead of quietly publishing a signed-but-unnotarised app.
+
+What a signed build does beyond signing:
+
+- signs with the hardened runtime and [build/entitlements.mac.plist](build/entitlements.mac.plist), with [build/entitlements.mac.inherit.plist](build/entitlements.mac.inherit.plist) for Electron's helpers and the bundled `ffmpeg`/`ffprobe`, which are executed as child processes
+- submits the app to Apple's notary service and **staples** the ticket onto it ([build/notarize.js](build/notarize.js)). electron-builder's own notarisation only submits; without stapling, first launch still fails for anyone offline, and the ticket has to travel inside the DMG
+- re-opens the DMG it is about to publish and fails unless the app and both FFmpeg binaries verify, the authority is `Developer ID Application`, `xcrun stapler validate` passes and Gatekeeper (`spctl`) accepts it
+- checks every Windows `.exe` with `Get-AuthenticodeSignature` and fails unless each reports `Valid`, because electron-builder downgrades a failed signature to a warning
+
+Secrets are exported into the job environment only when they exist — an unset secret is an empty string, and electron-builder treats an empty `CSC_LINK` as a certificate it must import, which fails the build. When a secret set is incomplete the build still runs and annotates the release build with a warning, so a fork without secrets can still produce installers.
+
+Notarisation needs a paid Apple Developer Program membership and a **Developer ID Application** certificate; an *Apple Development* certificate signs but Apple will not notarise it.
 
 ---
 
@@ -270,7 +304,11 @@ electron/
 scripts/
   make-demo.js  Demo library + demo XMLTV generator
   make-icon.js  Renders build/icon.png with no image dependencies
-build/icon.png  Source icon (electron-builder makes .icns/.ico)
+build/
+  icon.png                    Source icon (electron-builder makes .icns/.ico)
+  entitlements.mac.plist      Hardened-runtime entitlements for the app
+  entitlements.mac.inherit.plist   Entitlements for helpers, ffmpeg and ffprobe
+  notarize.js                 afterSign hook: notarise the app, then staple the ticket
 ```
 
 ---

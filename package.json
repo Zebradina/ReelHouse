@@ -24,6 +24,7 @@
     "hls.js": "^1.7.4"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8"
   },
@@ -31,6 +32,7 @@
     "appId": "com.reelhouse.app",
     "productName": "ReelHouse",
     "asar": true,
+    "afterSign": "build/notarize.js",
     "files": [
       "electron/**/*",
       "server/**/*",
@@ -56,6 +58,9 @@
     },
     "mac": {
       "category": "public.app-category.entertainment",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "target": [
         {
           "target": "dmg",

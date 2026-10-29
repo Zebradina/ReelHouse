@@ -10,6 +10,11 @@ name: Installers
 #
 # Tag push -> release for that tag. workflow_dispatch -> rebuild the assets of an
 # existing release, e.g. `gh workflow run installers.yml -f tag=v1.6.0`.
+#
+# Signing is driven by repository secrets and degrades in steps: no secrets ->
+# unsigned installers with a warning annotation; a certificate -> signed; a
+# certificate plus Apple credentials -> signed, notarised and stapled. The
+# secrets themselves are documented in README.md under "Code signing".
 
 on:
   push:
@@ -48,10 +53,40 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # A secret that does not exist resolves to an empty string, and
+      # electron-builder only checks CSC_LINK for null — an empty value makes it
+      # try to import "" as a certificate and fail the build. So export the
+      # variables only when they are actually set.
+      - name: Configure signing
+        env:
+          CERT: ${{ secrets.MAC_CSC_LINK }}
+          CERT_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$CERT" ]; then
+            echo "::warning title=Unsigned macOS build::MAC_CSC_LINK is not set, so this DMG ships unsigned and Gatekeeper will block it until the quarantine flag is cleared."
+          else
+            echo "CSC_LINK=$CERT" >> "$GITHUB_ENV"
+            echo "CSC_KEY_PASSWORD=$CERT_PASSWORD" >> "$GITHUB_ENV"
+            echo "Certificate found: signing with a Developer ID."
+          fi
+
+          if [ -n "$APPLE_ID_SECRET" ]; then
+            echo "APPLE_ID=$APPLE_ID_SECRET" >> "$GITHUB_ENV"
+            echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_PASSWORD_SECRET" >> "$GITHUB_ENV"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET" >> "$GITHUB_ENV"
+          fi
+
+          if [ -z "$CERT" ] && [ -n "$APPLE_ID_SECRET" ]; then
+            echo "::warning title=Notarisation skipped::Apple credentials are set but MAC_CSC_LINK is not, and only a Developer ID signature can be notarised."
+          elif [ -n "$CERT" ] && [ -z "$APPLE_ID_SECRET" ]; then
+            echo "::warning title=Not notarised::The app will be signed but not notarised, because APPLE_ID is not set."
+          fi
+
       - name: Build DMG
         run: npx electron-builder --mac --${{ matrix.arch }} --publish never
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
 
       # package.json lists both architectures for each macOS target, so a single
       # build produces two DMGs: this runner's own (correct) one and the other
@@ -83,6 +118,32 @@ jobs:
           file "$APP/Contents/MacOS/ReelHouse" "$FFMPEG" "$FFPROBE"
           file "$FFMPEG" "$FFPROBE" | grep -q "$EXPECT"
 
+          # Signing checks only make sense when a certificate was imported;
+          # without one the app is ad-hoc signed and Gatekeeper will reject it.
+          if [ -n "$CSC_LINK" ]; then
+            echo "== signature =="
+            codesign --verify --deep --strict --verbose=2 "$APP"
+            # ffmpeg/ffprobe are exec'd as child processes, so a broken seal on
+            # them breaks transcoding rather than playback.
+            codesign --verify --strict --verbose=2 "$FFMPEG"
+
+            SIGNATURE=$(codesign -dv --verbose=4 "$APP" 2>&1)
+            echo "$SIGNATURE" | grep -E '^(Identifier|Authority|TeamIdentifier)='
+            # --verify also passes for an ad-hoc signature, which Gatekeeper
+            # rejects, so require the certificate type we asked for.
+            echo "$SIGNATURE" | grep -q '^Authority=Developer ID Application'
+
+            if [ -n "$APPLE_ID" ]; then
+              echo "== notarisation =="
+              xcrun stapler validate "$APP"
+              spctl --assess --type execute --verbose=4 "$APP"
+            else
+              echo "not notarised: no Apple credentials"
+            fi
+          else
+            echo "unsigned build: no certificate to verify"
+          fi
+
           echo "path=$DMG" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
@@ -107,10 +168,39 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Same reason as the macOS job: an unset secret is an empty string, and
+      # electron-builder would try to import "" as a certificate.
+      - name: Configure signing
+        shell: pwsh
+        env:
+          CERT: ${{ secrets.WIN_CSC_LINK }}
+          CERT_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CERT)) {
+            Write-Host "::warning title=Unsigned Windows build::WIN_CSC_LINK is not set, so the installers ship unsigned and SmartScreen will warn about an unknown publisher."
+            exit 0
+          }
+          "WIN_CSC_LINK=$($env:CERT)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "WIN_CSC_KEY_PASSWORD=$($env:CERT_PASSWORD)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Certificate found: signing the installers."
+
       - name: Build installer and portable exe
         run: npx electron-builder --win --publish never
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      # electron-builder reports a failed signature as a warning, so check the
+      # Authenticode signature on what is about to be published.
+      - name: Verify the installers are signed
+        if: env.WIN_CSC_LINK != ''
+        shell: pwsh
+        run: |
+          $unsigned = @()
+          Get-ChildItem dist/*.exe | ForEach-Object {
+            $sig = Get-AuthenticodeSignature -FilePath $_.FullName
+            Write-Host ("{0}: {1}" -f $_.Name, $sig.Status)
+            Write-Host ("  signer: {0}" -f $sig.SignerCertificate.Subject)
+            if ($sig.Status -ne 'Valid') { $unsigned += $_.Name }
+          }
+          if ($unsigned.Count -gt 0) { throw "Not validly signed: $($unsigned -join ', ')" }
 
       - uses: actions/upload-artifact@v4
         with:
