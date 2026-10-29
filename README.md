@@ -87,9 +87,24 @@ Notes:
 
 - Desktop data lives in the platform app-data folder under `…/ReelHouse/data`, separate from the CLI (`~/Library/Application Support/ReelHouse` on macOS, `%APPDATA%\ReelHouse` on Windows).
 - Build Windows installers on Windows for the smoothest result; cross-building from macOS needs Wine for NSIS.
+- `npm run dist:mac` builds both architectures on one machine, but only the host architecture gets a matching FFmpeg — use the release workflow below when publishing.
 - Unpacked macOS builds are unsigned. Opening them on another Mac requires right-click → Open, or signing with your own Developer ID.
 - Menu shortcuts: `Cmd/Ctrl+Shift+R` rescans the library, `Cmd/Ctrl+,` opens Settings; reload, zoom and fullscreen are in the View menu.
 - The desktop bundle carries its own FFmpeg (~50 MB per platform), so MKV/HEVC/AVI playback needs nothing installed. The binaries are unpacked from the app bundle and executed locally.
+
+### Releases
+
+Pushing a `v*` tag builds every installer on GitHub Actions and attaches it to that tag's release:
+
+| Job | Runner | Artifact |
+|---|---|---|
+| macOS arm64 | `macos-15` | `ReelHouse-<version>-arm64.dmg` |
+| macOS Intel | `macos-15-intel` | `ReelHouse-<version>.dmg` |
+| Windows x64 | `windows-latest` | `ReelHouse Setup <version>.exe` + portable `.exe` |
+
+To rebuild the assets of a release that already exists: `gh workflow run installers.yml -f tag=v1.6.0`.
+
+Each macOS architecture is built on a matching runner because `ffmpeg-static` and `@ffprobe-installer` install the binary for the machine they install on: an Intel DMG built on Apple silicon would ship an arm64 FFmpeg, and transcoding would fail on the very Macs it targets. The workflow mounts the DMG it is about to publish and fails unless the app, FFmpeg and ffprobe all match the runner's architecture.
 
 ---
 
