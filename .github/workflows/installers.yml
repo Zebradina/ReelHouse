@@ -24,6 +24,9 @@ on:
       tag:
         description: Existing release tag to attach the installers to (e.g. v1.6.0)
         required: true
+      ref:
+        description: Source ref to build (defaults to the tag decided above)
+        required: false
 
 permissions:
   contents: write
@@ -43,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -158,7 +161,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -214,13 +217,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
+          # No `cache: gradle`: it hashes the Gradle files in the checkout, and
+          # a tag that predates android/ would fail the whole job over a cache
+          # lookup. The wrapper download is a minute; a red build is worse.
 
       - uses: android-actions/setup-android@v3
 
