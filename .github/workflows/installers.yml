@@ -53,25 +53,42 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Check bundled binaries are the right architecture
+      # package.json lists both architectures for each macOS target, so a single
+      # build produces two DMGs: this runner's own (correct) one and the other
+      # architecture packed with the host's FFmpeg (wrong). Mount the DMG we are
+      # about to publish and prove the player, FFmpeg and ffprobe inside it match.
+      - name: Verify the DMG and pick the matching one
+        id: dmg
         run: |
           # `file` spells the Intel architecture x86_64, not x64.
           case "${{ matrix.arch }}" in
             x64) EXPECT=x86_64 ;;
             *) EXPECT=arm64 ;;
           esac
-          APP="dist/mac-${{ matrix.arch }}/ReelHouse.app"
-          test -d "$APP" || APP="dist/mac/ReelHouse.app"
-          echo "app: $APP"
+
+          if [ "${{ matrix.arch }}" = 'arm64' ]; then
+            DMG=$(ls dist/*-arm64.dmg | head -1)
+          else
+            DMG=$(ls dist/*.dmg | grep -v -- '-arm64\.dmg$' | head -1)
+          fi
+          echo "dmg: $DMG"
+
+          MOUNT=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
+
+          APP="$MOUNT/ReelHouse.app"
           FFMPEG=$(find "$APP" -type f -name ffmpeg | head -1)
           FFPROBE=$(find "$APP" -type f -name ffprobe | head -1)
           file "$APP/Contents/MacOS/ReelHouse" "$FFMPEG" "$FFPROBE"
           file "$FFMPEG" "$FFPROBE" | grep -q "$EXPECT"
 
+          echo "path=$DMG" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
-          path: dist/*.dmg
+          path: ${{ steps.dmg.outputs.path }}
           if-no-files-found: error
 
   windows:
