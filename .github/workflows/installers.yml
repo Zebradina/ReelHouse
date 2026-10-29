@@ -145,6 +145,8 @@ jobs:
       - name: Publish SHA-256 checksums
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job has no checkout, so tell gh which repository to talk to.
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           : > SHA256SUMS.txt
