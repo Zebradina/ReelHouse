@@ -11,6 +11,7 @@ const { Store } = require('./store');
 const { Tmdb, IMAGE_ROOT } = require('./tmdb');
 const { Scanner } = require('./scanner');
 const { Epg } = require('./epg');
+const { Live, rewritePlaylist } = require('./live');
 const { discoverSubtitles, toVtt, decode } = require('./subtitles');
 const transcode = require('./transcode');
 const discovery = require('./discovery');
@@ -22,6 +23,8 @@ const PUBLIC_DIR = path.join(APP_ROOT, 'public');
 // What the listener actually bound to. Settings compares this with the saved
 // config to tell the user whether a restart is still needed.
 const runtime = { host: null, port: null, discovery: false };
+
+const { Readable } = require('stream');
 
 const MIME = {
   '.mp4': 'video/mp4',
@@ -79,6 +82,25 @@ function discoverResults(payload, type) {
     .map((raw) => discoverItem(raw, type));
 }
 
+/** Channel names differ only in punctuation between a playlist and an XMLTV file. */
+function normaliseChannelName(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * How the browser should play a channel URL.
+ *
+ * HLS is the default rather than a guess: IPTV links frequently have no file
+ * extension at all (`/live/user/pass/101`), and those are virtually always
+ * m3u8. The player falls back to a plain video source if the manifest fails.
+ */
+function liveKind(url) {
+  const clean = String(url || '').split('?')[0].toLowerCase();
+  if (/\.m3u8$/.test(clean)) return 'hls';
+  if (/\.(mp4|m4v|webm|ogv|mp3|aac|ts)$/.test(clean)) return 'file';
+  return 'hls';
+}
+
 function createApp() {
   config.load();
 
@@ -87,6 +109,7 @@ function createApp() {
   const library = new Store(DIRS.library, { version: 1, movies: [], shows: [], counts: { movies: 0, shows: 0, episodes: 0, files: 0 } });
   const progress = new Store(DIRS.progress, { version: 1, items: {} });
   const epg = new Epg({ cacheFile: DIRS.epgCache });
+  const live = new Live({ cacheFile: DIRS.liveCache });
 
   // A rescan asked for mid-scan (link, unlink, settings save) must not be lost.
   let rescanQueued = false;
@@ -200,6 +223,91 @@ function createApp() {
     return summary;
   }
 
+  async function refreshLive() {
+    const cfg = config.get();
+    if (!cfg.live.sources.length) {
+      // Clearing the list should not leave yesterday's channels in the guide.
+      if (live.channels().length) {
+        await live.refresh([]);
+      }
+      return live.summary();
+    }
+    const summary = await live.refresh(cfg.live.sources);
+    state.live = summary;
+    return summary;
+  }
+
+  /**
+   * XMLTV channel -> playlist channel, so guide data follows the station into
+   * the row you can actually press play on. tvg-id is the reliable link; name
+   * matching is the fallback for playlists that carry no ids.
+   */
+  function channelRemap() {
+    const map = new Map();
+    const liveChannels = live.channels();
+    if (!liveChannels.length) return map;
+
+    const byTvg = new Map(epg.data.channels.map((channel) => [channel.id, channel]));
+    const byName = new Map(epg.data.channels.map((channel) => [normaliseChannelName(channel.name), channel]));
+    const claimed = new Set();
+
+    for (const channel of liveChannels) {
+      const match =
+        (channel.tvgId && byTvg.get(channel.tvgId)) ||
+        byName.get(normaliseChannelName(channel.name)) ||
+        null;
+      if (!match || claimed.has(match.id)) continue;
+      claimed.add(match.id);
+      byName.delete(normaliseChannelName(match.name));
+      map.set(match.id, channel);
+    }
+    return map;
+  }
+
+  /**
+   * Channels and programmes for the guide.
+   *
+   * Playlist channels come first, in playlist order (that is the order the user
+   * chose), followed by schedules the EPG knows but no playlist covers — those
+   * rows still show what is on, they just cannot be watched.
+   */
+  function guideWindow(fromIso, toIso) {
+    const window = epg.window(fromIso, toIso);
+    const liveChannels = live.channels();
+    if (!liveChannels.length) {
+      return { channels: window.channels.map((c) => ({ ...c, live: false, hasGuide: true })), programmes: window.programmes };
+    }
+
+    const remap = channelRemap();
+    const matched = new Map();
+    for (const [xmltvId, channel] of remap) matched.set(channel.id, xmltvId);
+
+    const channels = liveChannels.map((channel) => {
+      const guide = matched.has(channel.id) ? epg.data.channels.find((c) => c.id === matched.get(channel.id)) : null;
+      return {
+        id: channel.id,
+        name: channel.name,
+        number: channel.number,
+        icon: channel.icon || (guide && guide.icon) || null,
+        group: channel.group || null,
+        live: true,
+        hasGuide: Boolean(guide),
+      };
+    });
+
+    for (const channel of window.channels) {
+      if (remap.has(channel.id)) continue;
+      channels.push({ ...channel, live: false, hasGuide: true });
+    }
+
+    const programmes = window.programmes.map((programme) => {
+      const target = remap.get(programme.channel);
+      return target ? { ...programme, channel: target.id } : programme;
+    });
+
+    return { channels, programmes };
+  }
+
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
@@ -271,6 +379,7 @@ function createApp() {
       },
       scan: state.scan,
       epg: epg.summary(),
+      live: live.summary(),
       mediaDirs: cfg.mediaDirs,
       network: networkSummary(),
       playback: {
@@ -327,6 +436,19 @@ function createApp() {
       }
     }
 
+    if (body.live && Array.isArray(body.live.sources)) {
+      patch.live = {
+        sources: body.live.sources
+          .filter((s) => s && typeof (s.url || s.source) === 'string' && String(s.url || s.source).trim())
+          .map((s, i) => ({
+            id: s.id || `live-${crypto.randomBytes(4).toString('hex')}-${i}`,
+            name: String(s.name || '').trim() || 'M3U playlist',
+            url: String(s.url || s.source).trim(),
+            enabled: s.enabled !== false,
+          })),
+      };
+    }
+
     if (body.epg && Array.isArray(body.epg.sources)) {
       patch.epg = {
         sources: body.epg.sources
@@ -360,6 +482,7 @@ function createApp() {
 
     if (patch.mediaDirs) scheduleScan();
     if (patch.epg) setTimeout(refreshEpg, 150);
+    if (patch.live) setTimeout(refreshLive, 150);
     // New language or key: metadata on disk still carries the old look.
     if (patch.tmdb && tmdb.enabled && tmdbRescan) scheduleScan();
   });
@@ -854,18 +977,36 @@ function createApp() {
     if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
       return res.status(400).json({ error: 'Invalid from/to' });
     }
-    const window = epg.window(from.toISOString(), to.toISOString());
+    const window = guideWindow(from.toISOString(), to.toISOString());
     return res.json({
       from: from.toISOString(),
       to: to.toISOString(),
       channels: window.channels,
       programmes: window.programmes,
       summary: epg.summary(),
+      live: live.summary(),
     });
   });
 
   app.get('/api/epg/now', (req, res) => {
-    res.json({ now: new Date().toISOString(), entries: epg.now() });
+    const remap = channelRemap();
+    const entries = epg.now().map((entry) => {
+      const channel = remap.get(entry.channel.id);
+      // A programme on a station the playlist also carries becomes watchable.
+      return channel
+        ? {
+            ...entry,
+            channel: {
+              id: channel.id,
+              name: channel.name,
+              number: channel.number,
+              icon: channel.icon || entry.channel.icon || null,
+              live: true,
+            },
+          }
+        : { ...entry, channel: { ...entry.channel, live: false } };
+    });
+    res.json({ now: new Date().toISOString(), entries });
   });
 
   app.post('/api/epg/refresh', async (req, res) => {
@@ -874,6 +1015,98 @@ function createApp() {
       return res.json({ ok: true, summary });
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ----------------------------------------------------------------- live TV
+  app.get('/api/live', (req, res) => {
+    res.json({
+      summary: live.summary(),
+      channels: live.channels().map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        number: channel.number,
+        icon: channel.icon,
+        group: channel.group,
+        tvgId: channel.tvgId,
+      })),
+    });
+  });
+
+  app.post('/api/live/refresh', async (req, res) => {
+    try {
+      return res.json({ ok: true, summary: await refreshLive() });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  /** Where to point hls.js or a <video> for one channel. */
+  app.get('/api/live/play/:id', (req, res) => {
+    const channel = live.get(req.params.id);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    return res.json({
+      id: channel.id,
+      name: channel.name,
+      group: channel.group,
+      kind: liveKind(channel.url),
+      url: `/api/live/proxy?u=${encodeURIComponent(channel.url)}`,
+    });
+  });
+
+  /**
+   * Fetch an upstream stream on the browser's behalf.
+   *
+   * Playlists are rewritten so every variant and segment comes back through here
+   * (see rewritePlaylist); everything else is piped through untouched, including
+   * Range requests, which is what makes seeking in a progressive stream work.
+   */
+  app.get('/api/live/proxy', async (req, res) => {
+    let target;
+    try {
+      target = new URL(String(req.query.u || ''));
+    } catch {
+      return res.status(400).type('text/plain').send('Missing or invalid u parameter');
+    }
+    if (!/^https?:$/.test(target.protocol)) {
+      return res.status(400).type('text/plain').send('Only http and https streams can be proxied');
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    try {
+      const upstream = await fetch(target, {
+        signal: controller.signal,
+        redirect: 'follow',
+        headers: {
+          'user-agent': 'ReelHouse/1.0',
+          accept: '*/*',
+          ...(req.headers.range ? { range: req.headers.range } : {}),
+        },
+      });
+      clearTimeout(timer);
+
+      const type = String(upstream.headers.get('content-type') || '').toLowerCase();
+      if (/mpegurl/.test(type) || /\.m3u8$/i.test(target.pathname)) {
+        const text = await upstream.text();
+        res.setHeader('content-type', 'application/vnd.apple.mpegurl');
+        res.setHeader('cache-control', 'no-store');
+        return res.send(rewritePlaylist(text, target.toString()));
+      }
+
+      res.status(upstream.status);
+      for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) {
+        const value = upstream.headers.get(header);
+        if (value) res.setHeader(header, value);
+      }
+      res.setHeader('cache-control', 'no-store');
+      if (!upstream.body) return res.end();
+      return Readable.fromWeb(upstream.body).pipe(res);
+    } catch (err) {
+      clearTimeout(timer);
+      if (res.headersSent) return res.end();
+      const reason = err.name === 'AbortError' ? 'the stream did not answer in time' : err.message;
+      return res.status(502).type('text/plain').send(`Could not reach the stream: ${reason}`);
     }
   });
 
@@ -929,14 +1162,18 @@ function createApp() {
     if (cfg.epg.sources.length) {
       setTimeout(() => refreshEpg(), 1200);
     }
+    if (cfg.live.sources.length) {
+      setTimeout(() => refreshLive(), 1500);
+    }
     const hours = Math.max(1, Number(cfg.epg.refreshHours) || 6);
     const timer = setInterval(() => {
       if (config.get().epg.sources.length) refreshEpg();
+      if (config.get().live.sources.length) refreshLive();
     }, hours * 3600 * 1000);
     if (timer.unref) timer.unref();
   }
 
-  return { app, bootstrap, state, library, epg, tmdb, runScan, refreshEpg };
+  return { app, bootstrap, state, library, epg, live, tmdb, runScan, refreshEpg, refreshLive };
 }
 
 function start({ port, host } = {}) {

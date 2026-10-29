@@ -37,6 +37,7 @@ const DIRS = {
   library: path.join(DATA_DIR, 'library.json'),
   progress: path.join(DATA_DIR, 'progress.json'),
   epgCache: path.join(DATA_DIR, 'epg-cache.json'),
+  liveCache: path.join(DATA_DIR, 'live-cache.json'),
   tmdbCache: path.join(DATA_DIR, 'tmdb-cache.json'),
   artCache: path.join(DATA_DIR, 'artcache'),
   logs: path.join(DATA_DIR, 'logs'),
@@ -64,6 +65,11 @@ const DEFAULT_CONFIG = {
   ],
   epg: {
     // { id, name, source (path or URL), enabled }
+    sources: [],
+    refreshHours: 6,
+  },
+  live: {
+    // { id, name, url (M3U playlist, path or URL), enabled }
     sources: [],
     refreshHours: 6,
   },
@@ -159,9 +165,11 @@ function publicConfig() {
   return {
     ...cfg,
     tmdb: { ...cfg.tmdb, apiKey: '', hasApiKey: Boolean(cfg.tmdb.apiKey) },
-    // EPG URLs often carry a token in the query string; the settings form has to
-    // round-trip them unchanged or saving would silently break the feed.
+    // EPG and playlist URLs often carry a token in the query string; the
+    // settings form has to round-trip them unchanged or saving would silently
+    // break the feed.
     epg: { ...cfg.epg, sources: cfg.epg.sources.map((s) => ({ ...s })) },
+    live: { ...cfg.live, sources: (cfg.live.sources || []).map((s) => ({ ...s })) },
   };
 }
 

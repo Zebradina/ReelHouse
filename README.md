@@ -15,6 +15,7 @@ Nothing leaves your computer. ReelHouse does not copy your media, does not trans
 | **Movies** | Folder scan, filename/year parsing, TMDB posters, banners, logos, synopsis, runtime, rating, genres |
 | **TV Shows** | Show → season → episode structure from `S01E02` names, episode stills, titles, air dates, season selector |
 | **TV Guide (EPG)** | XMLTV files or URLs, multi-source merge, scrollable timeline, live "now" line, day navigation, programme details |
+| **Live TV (M3U)** | Point Settings at one or more M3U/M3U8 playlists and their channels join the guide with a play button; HLS is proxied through the server so CORS and credentials stay off the browser |
 | **Banners** | Widescreen TMDB backdrops on the home hero carousel, movie/series detail pages, and "On TV now" cards |
 | **Player** | HTML5 player with byte-range streaming (seek anywhere instantly), resume position, progress bars everywhere |
 | **Codecs** | MKV, AVI, HEVC, MPEG-2/4, WMV/VC-1, DTS, AC-3, TrueHD and everything else FFmpeg opens — converted to H.264/AAC on demand, only when the browser needs it |
@@ -27,7 +28,7 @@ Nothing leaves your computer. ReelHouse does not copy your media, does not trans
 | **Android TV** | Sideloadable APK that finds the server on your Wi-Fi and runs the same interface with a remote, no address typing |
 | **Local by default** | Binds to `127.0.0.1`; network access is a switch in Settings, cross-origin requests are rejected, TMDB key stored with `0600` permissions |
 
-The TV guide shows the schedule you supply. ReelHouse is not an IPTV player and ships no channel feeds — add an XMLTV source (your provider, or a freely published guide) in Settings.
+The TV guide shows the schedule you supply. ReelHouse ships no channel feeds of its own: add an XMLTV source for the listings and, if you want to watch, an M3U playlist for the streams — both in Settings. A guide without a playlist still works as a schedule; a playlist without a guide still plays, it just has no programmes in the timeline.
 
 ---
 
@@ -194,6 +195,7 @@ Settings (and the equivalent `config.json`) covers:
 | Mixed folders | One folder holding both kinds, matched per file from `S01E02`-style names |
 | TMDB link + language | Key is verified against TMDB before saving and never returned to the browser; the card shows credential type, account and link date, and *Save language & refresh* re-fetches the library |
 | TV guide sources | Any number of XMLTV files or `http(s)` URLs; refresh every 6h and on demand |
+| Live TV playlists | Any number of M3U/M3U8 playlists, as `http(s)` URLs or a path on this machine; refreshed on save and on demand |
 | Scan on start | Index at launch (default on) |
 
 Files are kept in one data directory:
@@ -209,6 +211,7 @@ config.json        settings (mode 0600 — contains your TMDB key)
 library.json       scanned library + metadata
 progress.json      playback positions
 epg-cache.json     parsed XMLTV channels/programmes
+live-cache.json    channels parsed from your M3U playlists
 tmdb-cache.json    metadata response cache (keeps rescans cheap)
 artcache/          downloaded TMDB artwork (served offline afterwards)
 ```
@@ -227,7 +230,8 @@ Set `REELHOUSE_DATA=/some/path` to use a different directory, or `PORT=9000` to 
 | **Movies / TV Shows** | Sortable poster grid; TMDB ratings; hover play |
 | **Detail pages** | Full-bleed backdrop banner, logo art, synopsis, facts, season pill selector, episode list with stills and progress |
 | **Discovery** | Trending this week, popular movies and popular TV, with streaming-service badges and a where-to-watch sheet per title |
-| **TV Guide** | Channel column + 24-hour timeline, 30-minute gridlines, live programme highlighting, current-time marker, programme sheet with library deep-link |
+| **TV Guide** | Channel column + 24-hour timeline, 30-minute gridlines, live programme highlighting, current-time marker, ▶ on any playlist channel to watch live, programme sheet with library deep-link |
+| **Live player** | Channel name and group, a LIVE badge, native controls and subtitles where the stream carries them; Back returns to the guide |
 | **Search** | `/` to focus; results across movies, series and the guide |
 | **Player** | Range-streamed video, resume, subtitles, up-next autoplay, keyboard/native controls (`N` next, `C` captions, `Esc` back), clear message when a codec can't be decoded |
 
@@ -256,6 +260,18 @@ Both `Subs/` and `Subtitles/` subfolders are checked. SRT is converted to WebVTT
 Where to watch comes from JustWatch through TMDB, so it is per country: pick yours under **Settings → TMDB → Streaming region** (saved as soon as you choose it, no re-scan). The buttons open the title's JustWatch page, which hands you straight to the service — streaming services do not publish per-title deep links. Availability is checked lazily after the page paints, so the rows appear immediately and the badges fill in a moment later; lists are cached for 6 hours and availability for 12.
 
 Discover needs a linked TMDB key. Without one the tab explains how to link it. The required “This product uses the TMDB API but is not endorsed or certified by TMDB” notice sits in the page footer.
+
+### Live TV
+
+**Settings → Live TV (M3U)** takes any number of playlists — an IPTV provider's `http(s)` link, or a path to a `.m3u` file on this machine. Channels appear in the guide in playlist order with a ▶ button; press it (or a programme on that channel) to watch. The list is refreshed when you save and via **Refresh channels now**.
+
+Channels are matched to guide data by `tvg-id` first and channel name second, so a playlist entry inherits the station's programmes. Names that repeat the channel number (`101 BBC One`) are split, leaving the number in the guide's number column.
+
+Saving a playlist stores its URL in `config.json` (mode `0600`) — provider links usually embed your username and password, so they are never sent back to the browser and are redacted in logs and error messages.
+
+Playback goes through `/api/live/proxy`, which fetches the stream server-side and rewrites HLS playlists so variants, keys and segments all come back through ReelHouse. That is what makes provider streams work at all: they rarely send CORS headers, and the relative segment paths only resolve against the playlist's own URL. A provider that requires a specific `User-Agent` or referer may still refuse; those are not spoofed.
+
+Live channels are streams, not files: there is no resume, no transcoding and no next-episode — a channel that fails to open shows the player's error rather than a converted fallback.
 
 ### Up next
 
@@ -301,6 +317,10 @@ All endpoints are served by the local service; the UI uses nothing else.
 | `DELETE` | `/api/tmdb` | Unlink: forget the key and rescan without it |
 | `GET` | `/api/epg?from=&to=` | Guide window |
 | `GET` | `/api/epg/now` | What's on right now, per channel |
+| `GET` | `/api/live` | Configured playlists' channels |
+| `POST` | `/api/live/refresh` | Re-fetch every playlist |
+| `GET` | `/api/live/play/:id` | Playback URL for one channel (always the proxy) |
+| `GET` | `/api/live/proxy?u=` | Server-side stream fetch; rewrites HLS playlists through itself |
 | `POST` | `/api/epg/refresh` | Re-parse all XMLTV sources |
 | `GET` | `/api/play/:kind/:id` | Resolve a playable file, stream URL and subtitle tracks |
 | `GET` | `/api/stream/:kind/:id` | Video bytes with `Range` support |

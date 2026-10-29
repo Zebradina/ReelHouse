@@ -1097,7 +1097,7 @@ async function renderGuide() {
           style="left:${start * PX_PER_MIN}px;width:${width}px"
           data-title="${esc(p.title)}" data-sub="${esc(p.subTitle || '')}" data-desc="${esc(p.desc || '')}"
           data-start="${esc(p.start)}" data-stop="${esc(p.stop)}" data-channel="${esc(channel.name)}"
-          data-category="${esc(p.category || '')}">
+          data-channel-id="${esc(channel.id)}" data-category="${esc(p.category || '')}">
           <span class="programme-title">${esc(p.title)}</span>
           <span class="programme-time">${live ? '● ' : ''}${timeLabel}</span>
           ${width > 190 && p.desc ? `<span class="programme-desc">${esc(p.desc)}</span>` : ''}
@@ -1106,16 +1106,25 @@ async function renderGuide() {
       .join('');
 
     const initial = channel.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || 'TV';
+    const play = channel.live
+      ? `<button class="channel-play" data-live="${esc(channel.id)}" aria-label="Watch ${esc(channel.name)} live" title="Watch live">
+           <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+         </button>`
+      : '';
+    const empty = channel.live && !programmes
+      ? '<div class="guide-track-empty">No guide data for this channel — press play to watch live</div>'
+      : '';
     return `
       <div class="guide-row">
-        <div class="guide-channel">
+        <div class="guide-channel ${channel.live ? 'is-live' : ''}">
+          ${play}
           <div class="channel-logo">${channel.icon ? `<img src="${esc(channel.icon)}" alt="" loading="lazy" onerror="this.remove()">` : esc(initial)}</div>
           <div class="channel-meta">
             <div class="channel-name">${esc(channel.name)}</div>
-            <div class="channel-num">${esc(channel.number || '')}</div>
+            <div class="channel-num">${esc(channel.number || '')}${channel.live ? '<span class="live-tag">LIVE</span>' : ''}</div>
           </div>
         </div>
-        <div class="guide-track" style="width:${timelineWidth}px;--half:${30 * PX_PER_MIN}px">${programmes}</div>
+        <div class="guide-track" style="width:${timelineWidth}px;--half:${30 * PX_PER_MIN}px">${programmes}${empty}</div>
       </div>`;
   }).join('');
 
@@ -1125,7 +1134,7 @@ async function renderGuide() {
         <span class="status-dot ok"></span>
         ${data.channels.length} channels · ${data.programmes.length} programmes
       </div>
-      <p class="tiny muted" style="margin:0">Scroll sideways for later · click a programme for details</p>
+      <p class="tiny muted" style="margin:0">Scroll sideways for later · ▶ on a channel to watch live · click a programme for details</p>
     </div>
     <div class="guide-shell">
       <div class="guide-scroll" id="guide-scroll">
@@ -1135,7 +1144,7 @@ async function renderGuide() {
             <div class="guide-ruler" style="width:${timelineWidth}px">${ruler.join('')}</div>
           </div>
           ${rows}
-          ${showNowLine ? `<div class="now-line" style="left:calc(148px + ${nowMinutes * PX_PER_MIN}px);top:44px"></div>` : ''}
+          ${showNowLine ? `<div class="now-line" style="left:calc(var(--guide-gutter) + ${nowMinutes * PX_PER_MIN}px);top:44px"></div>` : ''}
         </div>
       </div>
     </div>`;
@@ -1147,14 +1156,24 @@ async function renderGuide() {
   holder.querySelectorAll('.programme').forEach((block) => {
     block.addEventListener('click', () => {
       const title = block.dataset.title;
-      const match = findLibraryMatch(title);
+      const channel = data.channels.find((c) => c.id === block.dataset.channelId);
+      // A programme on a channel we can actually receive beats a library match.
+      const action = channel && channel.live
+        ? { label: `Watch ${channel.name} live`, href: `#/live/${encodeURIComponent(channel.id)}` }
+        : findLibraryMatch(title);
       openSheet({
         eyebrow: `${block.dataset.channel} · ${formatTime(block.dataset.start)} – ${formatTime(block.dataset.stop)}`,
         title,
         subtitle: block.dataset.sub || block.dataset.category || '',
         description: block.dataset.desc || 'No programme description supplied by the guide source.',
-        action: match,
+        action,
       });
+    });
+  });
+
+  holder.querySelectorAll('.channel-play').forEach((button) => {
+    button.addEventListener('click', () => {
+      location.hash = `#/live/${encodeURIComponent(button.dataset.live)}`;
     });
   });
 }
@@ -1648,6 +1667,106 @@ async function renderPlayer(kind, id) {
 }
 
 /* ============================================================
+   Live TV
+   ============================================================ */
+
+/**
+ * A single channel from the M3U playlist.
+ *
+ * Live playback has none of the on-demand player's furniture: no resume point,
+ * no next episode, no duration to scrub — and nothing is saved as progress,
+ * because a channel has no "where you were".
+ */
+async function renderLive(channelId) {
+  view.innerHTML = `
+    <div class="player-page">
+      <div class="player-top">
+        <button class="back" id="player-back">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M15 5l-7 7 7 7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back
+        </button>
+        <div class="player-titles">
+          <h1 id="live-title">Live TV</h1>
+          <p id="live-sub">Connecting…</p>
+        </div>
+        <div class="player-tools"><span class="player-chip live-chip">● LIVE</span></div>
+      </div>
+      <div class="player-stage"><video id="player" controls autoplay playsinline preload="auto"></video></div>
+      <div class="player-note" id="player-note" hidden></div>
+    </div>`;
+
+  const video = document.getElementById('player');
+  const note = document.getElementById('player-note');
+  const titleEl = document.getElementById('live-title');
+  const subEl = document.getElementById('live-sub');
+
+  document.getElementById('player-back').addEventListener('click', () => {
+    location.hash = '#/guide';
+  });
+
+  const fail = (message) => {
+    note.hidden = false;
+    note.textContent = message;
+  };
+
+  let info;
+  try {
+    info = await api.livePlay(channelId);
+  } catch (err) {
+    titleEl.textContent = 'Channel unavailable';
+    fail(err.status === 404
+      ? 'That channel is no longer in the playlist. Refresh channels in Settings → Live TV.'
+      : err.message);
+    return;
+  }
+
+  titleEl.textContent = info.name;
+  subEl.textContent = [info.group, 'Live TV'].filter(Boolean).join(' · ');
+
+  const Hls = window.Hls;
+  let controller = null;
+  let fellBack = false;
+
+  const useNative = () => {
+    video.src = info.url;
+    video.play().catch(() => {});
+  };
+
+  if (info.kind === 'hls' && Hls && Hls.isSupported()) {
+    controller = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 30 });
+    controller.loadSource(info.url);
+    controller.attachMedia(video);
+    controller.on(Hls.Events.ERROR, (_event, data) => {
+      if (!data.fatal) return;
+      if (!fellBack) {
+        // Some panels serve a progressive file behind a link that looks like HLS.
+        fellBack = true;
+        try { controller.destroy(); } catch { /* already gone */ }
+        controller = null;
+        useNative();
+        return;
+      }
+      fail(`This channel could not be played (${data.details || data.type}).`);
+    });
+  } else {
+    useNative();
+  }
+
+  video.addEventListener('error', () => {
+    if (fellBack && !controller) fail('This channel could not be played. The stream may be offline.');
+  });
+
+  state.playerCleanup = () => {
+    if (controller) {
+      controller.destroy();
+      controller = null;
+    }
+    video.removeAttribute('src');
+    video.load();
+  };
+}
+
+/* ============================================================
    Settings
    ============================================================ */
 
@@ -1737,6 +1856,19 @@ async function renderSettings() {
       blurb: 'A single folder holding both. ReelHouse decides per file from its name, so a film that looks like an episode can be misread — prefer separate folders when you can.',
     },
   ].map(folderCard).join('');
+
+  const liveStatus = status.live || { channelCount: 0, sourceCount: 0, errors: [], updatedAt: null };
+
+  const liveRow = (source = {}) => `
+    <div class="epg-row live-row" data-id="${esc(source.id || '')}">
+      <input class="input live-name" type="text" value="${esc(source.name || '')}" placeholder="Playlist name" aria-label="Playlist name" />
+      <input class="input live-url" type="text" value="${esc(source.url || '')}" placeholder="https://…/playlist.m3u or /path/playlist.m3u" aria-label="M3U playlist URL" />
+      <button class="icon-btn live-remove" aria-label="Remove playlist" title="Remove">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+      </button>
+    </div>`;
+
+  const liveRows = (config.live.sources || []).map((source) => liveRow(source)).join('');
 
   const epgRows = (config.epg.sources || []).map((source) => `
     <div class="epg-row">
@@ -1890,6 +2022,29 @@ async function renderSettings() {
           : ''}
       </section>
 
+      <section class="settings-card" id="live-card">
+        <div class="card-head">
+          <h2>Live TV (M3U)</h2>
+          <span class="link-badge ${liveStatus.channelCount ? 'on' : ''}">
+            <span class="status-dot ${liveStatus.channelCount ? 'ok' : ''}"></span>
+            ${liveStatus.channelCount ? `${liveStatus.channelCount} channels` : 'No channels'}
+          </span>
+        </div>
+        <p>Add an M3U/M3U8 playlist from your IPTV provider (or a path to a playlist file). Its channels appear in the TV Guide with a play button and stream live when you press it.</p>
+        <div id="live-rows">${liveRows}</div>
+        <div class="row-actions" style="margin-top:10px">
+          <button class="btn btn-quiet" id="add-live">+ Add playlist</button>
+          <button class="btn btn-quiet" id="refresh-live">Refresh channels now</button>
+          <span class="tiny muted">${liveStatus.updatedAt
+            ? `${liveStatus.sourceCount} playlist${liveStatus.sourceCount === 1 ? '' : 's'} · updated ${formatDate(liveStatus.updatedAt)}`
+            : 'Not loaded yet'}</span>
+        </div>
+        ${liveStatus.errors && liveStatus.errors.length
+          ? `<p class="tiny" style="color:var(--danger);margin-top:10px">${liveStatus.errors.map((e) => esc(`${e.name || e.source}: ${e.message}`)).join('<br>')}</p>`
+          : ''}
+        <p class="tiny muted" style="margin-top:10px">Channels are matched to the guide by <span class="mono">tvg-id</span>, falling back to the channel name. Playlist links often carry your username and password — they are stored in this machine's data folder only.</p>
+      </section>
+
       <section class="settings-card">
         <h2>TV guide (EPG)</h2>
         <p>Point ReelHouse at one or more XMLTV files or URLs. The guide refreshes automatically every ${config.epg.refreshHours || 6} hours, and you can refresh it on demand.</p>
@@ -2029,6 +2184,57 @@ async function renderSettings() {
       toast(`Guide refresh failed: ${err.message}`, 'error');
       button.disabled = false;
       button.textContent = 'Refresh guide now';
+    }
+  });
+
+  /* ------------------------------------------------------- Live TV (M3U) */
+  document.getElementById('add-live').addEventListener('click', () => {
+    const wrapper = document.getElementById('live-rows');
+    const row = document.createElement('div');
+    row.className = 'epg-row live-row';
+    row.innerHTML = `
+      <input class="input live-name" type="text" placeholder="My IPTV" aria-label="Playlist name" />
+      <input class="input live-url" type="text" placeholder="https://…/playlist.m3u" aria-label="M3U playlist URL" />
+      <button class="icon-btn live-remove" aria-label="Remove playlist" title="Remove">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+      </button>`;
+    wrapper.appendChild(row);
+    row.querySelector('input').focus();
+  });
+
+  document.getElementById('live-rows').addEventListener('click', (event) => {
+    const btn = event.target.closest('.live-remove');
+    if (btn) btn.closest('.live-row').remove();
+  });
+
+  const collectLiveSources = () => [...document.querySelectorAll('#live-rows .live-row')]
+    .map((row) => ({
+      id: row.dataset.id || undefined,
+      name: row.querySelector('.live-name').value.trim() || 'M3U playlist',
+      url: row.querySelector('.live-url').value.trim(),
+    }))
+    .filter((source) => source.url);
+
+  document.getElementById('refresh-live').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = 'Refreshing…';
+    try {
+      // Reloading from the form, not from disk: a playlist someone has just
+      // pasted has to work before they remember to press Save changes.
+      await api.saveSettings({ live: { sources: collectLiveSources() } });
+      const result = await api.refreshLive();
+      const failed = result.summary.errors || [];
+      if (result.summary.channelCount) {
+        toast(`Channels updated: ${result.summary.channelCount} live${failed.length ? ` · ${failed.length} playlist${failed.length === 1 ? '' : 's'} failed` : ''}`, failed.length ? 'error' : 'success');
+      } else {
+        toast(failed.length ? `No channels loaded — ${failed[0].message}` : 'No playlists to load yet', 'error');
+      }
+      renderSettings();
+    } catch (err) {
+      toast(`Channel refresh failed: ${err.message}`, 'error');
+      button.disabled = false;
+      button.textContent = 'Refresh channels now';
     }
   });
 
@@ -2232,6 +2438,8 @@ async function renderSettings() {
       }))
       .filter((source) => source.source);
 
+    const liveSources = collectLiveSources();
+
     button.disabled = true;
     button.textContent = 'Saving…';
     try {
@@ -2239,6 +2447,7 @@ async function renderSettings() {
       await api.saveSettings({
         mediaDirs: dirs,
         epg: { sources },
+        live: { sources: liveSources },
       });
       toast('Settings saved — scanning folders…', 'success');
       await Promise.all([loadLibrary(), api.status().then((s) => { state.status = s; })]);
@@ -2434,6 +2643,9 @@ function currentRoute() {
   if (parts[0] === 'settings') return { name: 'settings', render: renderSettings, nav: '' };
   if (parts[0] === 'watch' && parts[1] && parts[2]) {
     return { name: 'watch', render: () => renderPlayer(parts[1], parts[2]), nav: '' };
+  }
+  if (parts[0] === 'live' && parts[1]) {
+    return { name: 'live', render: () => renderLive(decodeURIComponent(parts[1])), nav: 'guide' };
   }
   return { name: 'home', render: renderHome, nav: 'home' };
 }

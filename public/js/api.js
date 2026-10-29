@@ -39,6 +39,9 @@ export const api = {
     request(`/api/epg?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   epgNow: () => request('/api/epg/now'),
   refreshEpg: () => request('/api/epg/refresh', { method: 'POST' }),
+  live: () => request('/api/live'),
+  refreshLive: () => request('/api/live/refresh', { method: 'POST' }),
+  livePlay: (id) => request(`/api/live/play/${encodeURIComponent(id)}`),
   play: (kind, id, { transcode = false, season, episode } = {}) => {
     const params = new URLSearchParams();
     if (transcode) params.set('transcode', '1');

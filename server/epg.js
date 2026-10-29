@@ -53,12 +53,18 @@ function channelNumber(name, index) {
 
 function normaliseChannel(raw, index) {
   const id = String(raw['@_id'] || `channel-${index}`);
-  const name = textOf(raw['display-name']) || id;
+  let name = textOf(raw['display-name']) || id;
+  const number = channelNumber(name, index);
+  // Plenty of guides repeat the channel number in the name ("103 Harbour
+  // Drama"). The guide has a number column, so drop it rather than waste the
+  // narrow name column repeating it.
+  const stripped = name.replace(new RegExp(`^${number}[\\s.\\-:|]+(\\S.*)$`), '$1').trim();
+  if (stripped) name = stripped;
   const iconNode = Array.isArray(raw.icon) ? raw.icon[0] : raw.icon;
   return {
     id,
     name,
-    number: channelNumber(name, index),
+    number,
     icon: (iconNode && iconNode['@_src']) || null,
   };
 }
