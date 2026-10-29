@@ -1318,6 +1318,8 @@ async function renderPlayer(kind, id) {
   let subtitleActive = -1;
   let selectSubtitle = null;
   let toggleCaptions = null;
+  /* Set while a subtitle menu exists; closes it and reports whether it did. */
+  let dismissSubsMenu = null;
 
   const goNext = next
     ? () => {
@@ -1456,8 +1458,19 @@ async function renderPlayer(kind, id) {
       item.addEventListener('click', () => {
         selectSubtitle(Number(item.dataset.index));
         closeMenu();
+        /* Return focus to the control that opened the menu, rather than leaving
+           it on a button that is now hidden — on a TV that would send the next
+           D-pad press back to the top of the player. */
+        button.focus();
       });
     });
+
+    dismissSubsMenu = () => {
+      if (menu.hidden) return false;
+      closeMenu();
+      button.focus();
+      return true;
+    };
 
     const onDocClick = (event) => {
       if (!wrap.contains(event.target)) closeMenu();
@@ -1481,6 +1494,8 @@ async function renderPlayer(kind, id) {
     const tag = (event.target && event.target.tagName) || '';
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
     if (event.key === 'Escape') {
+      /* Back dismisses an open menu before it leaves the player. */
+      if (dismissSubsMenu && dismissSubsMenu()) return;
       location.hash = parentHref;
       return;
     }

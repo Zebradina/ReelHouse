@@ -287,9 +287,6 @@
     var el = document.activeElement;
     if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
 
-    /* The player owns the screen while it is open; leave its keys alone. */
-    if (document.querySelector('.player-page')) return;
-
     /*
      * Swallow the arrow either way. With no candidate in that direction the
      * browser would otherwise scroll the page a little, which on a TV looks

@@ -1071,6 +1071,15 @@ img { display: block; max-width: 100%; }
 
 /* ------------------------------------------------------------ player */
 
+/*
+ * The player is fixed and sits above everything inside #view — but #view is a
+ * stacking context (position: relative; z-index: 1), so the sticky header at
+ * z-index 60 still painted over the player's Back and subtitle buttons. The
+ * header is navigation for browsing, so while something is playing it steps
+ * aside entirely.
+ */
+body:has(.player-page) .topbar { display: none; }
+
 .player-page {
   position: fixed;
   inset: 0;
