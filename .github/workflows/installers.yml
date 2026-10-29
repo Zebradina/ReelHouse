@@ -227,7 +227,23 @@ jobs:
           # a tag that predates android/ would fail the whole job over a cache
           # lookup. The wrapper download is a minute; a red build is worse.
 
-      - uses: android-actions/setup-android@v3
+      # Not android-actions/setup-android: it runs `sdkmanager tools`, and that
+      # package no longer exists on the runner image, so the step fails before
+      # Gradle starts. The image already has the SDK, so accept its licences and
+      # install exactly what compileSdk 34 needs.
+      - name: Install the Android SDK packages
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+          SDKMANAGER=$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "sdkmanager: $SDKMANAGER"
+          test -n "$SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build the TV app
         working-directory: android
