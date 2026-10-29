@@ -1,0 +1,120 @@
+name: Installers
+
+# Builds every installer on a native runner and attaches it to the release.
+#
+# macOS is built once per architecture on purpose: ffmpeg-static and
+# @ffprobe-installer install the binary for the *host*, so an Intel DMG made on
+# Apple silicon would carry an arm64 FFmpeg (and vice versa). macOS 15 is the
+# arm64 image; macos-15-intel is the x86_64 one (the last Intel image Actions
+# offers, through August 2027).
+#
+# Tag push -> release for that tag. workflow_dispatch -> rebuild the assets of an
+# existing release, e.g. `gh workflow run installers.yml -f tag=v1.6.0`.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach the installers to (e.g. v1.6.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build DMG
+        run: npx electron-builder --mac --${{ matrix.arch }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Check bundled binaries are the right architecture
+        run: |
+          APP="dist/mac-${{ matrix.arch }}/ReelHouse.app"
+          test -d "$APP" || APP="dist/mac/ReelHouse.app"
+          echo "app: $APP"
+          file "$APP/Contents/MacOS/ReelHouse"
+          FFMPEG=$(find "$APP" -type f -name ffmpeg | head -1)
+          FFPROBE=$(find "$APP" -type f -name ffprobe | head -1)
+          file "$FFMPEG" "$FFPROBE"
+          file "$FFMPEG" | grep -q "${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build installer and portable exe
+        run: npx electron-builder --win --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  release:
+    name: Attach to release
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+
+      - name: List installers
+        run: find installers -type f -printf '%p %s bytes\n' | sort
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: |
+            installers/macos-arm64/*.dmg
+            installers/macos-x64/*.dmg
+            installers/windows/*.exe
+          overwrite_files: true
+          fail_on_unmatched_files: true
