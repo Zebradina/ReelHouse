@@ -55,14 +55,18 @@ jobs:
 
       - name: Check bundled binaries are the right architecture
         run: |
+          # `file` spells the Intel architecture x86_64, not x64.
+          case "${{ matrix.arch }}" in
+            x64) EXPECT=x86_64 ;;
+            *) EXPECT=arm64 ;;
+          esac
           APP="dist/mac-${{ matrix.arch }}/ReelHouse.app"
           test -d "$APP" || APP="dist/mac/ReelHouse.app"
           echo "app: $APP"
-          file "$APP/Contents/MacOS/ReelHouse"
           FFMPEG=$(find "$APP" -type f -name ffmpeg | head -1)
           FFPROBE=$(find "$APP" -type f -name ffprobe | head -1)
-          file "$FFMPEG" "$FFPROBE"
-          file "$FFMPEG" | grep -q "${{ matrix.arch }}"
+          file "$APP/Contents/MacOS/ReelHouse" "$FFMPEG" "$FFPROBE"
+          file "$FFMPEG" "$FFPROBE" | grep -q "$EXPECT"
 
       - uses: actions/upload-artifact@v4
         with:
