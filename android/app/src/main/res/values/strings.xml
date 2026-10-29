@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ReelHouse TV</string>
+    <string name="connect_title">ReelHouse</string>
+    <string name="connect_subtitle">Your media, from the machine that hosts it.</string>
+    <string name="searching">Looking for ReelHouse on your network…</string>
+    <string name="search_again">Search again</string>
+    <string name="enter_address">Enter address</string>
+    <string name="address_hint">192.168.1.20:8090</string>
+    <string name="no_servers">No ReelHouse found yet. Make sure it is running with network access turned on in Settings → TV &amp; devices, or enter its address.</string>
+    <string name="connect_action">Connect</string>
+    <string name="cancel">Cancel</string>
+    <string name="continue_with">Continue with %1$s</string>
+    <string name="checking">Checking %1$s…</string>
+    <string name="cannot_reach">Could not reach %1$s. Check the address and that ReelHouse is running.</string>
+    <string name="hint">Use the arrow keys to choose, OK to select. Press Back to leave.</string>
+    <plurals name="found_count">
+        <item quantity="one">%1$d server found on your network.</item>
+        <item quantity="other">%1$d servers found on your network.</item>
+    </plurals>
+</resources>

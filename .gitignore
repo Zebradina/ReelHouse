@@ -5,3 +5,13 @@ demo-library/
 *.log
 .DS_Store
 .env
+
+# Android build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+*.apk
+*.aab

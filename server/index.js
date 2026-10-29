@@ -13,10 +13,15 @@ const { Scanner } = require('./scanner');
 const { Epg } = require('./epg');
 const { discoverSubtitles, toVtt, decode } = require('./subtitles');
 const transcode = require('./transcode');
+const discovery = require('./discovery');
 
 const { DIRS } = config;
 const APP_ROOT = path.join(__dirname, '..');
 const PUBLIC_DIR = path.join(APP_ROOT, 'public');
+
+// What the listener actually bound to. Settings compares this with the saved
+// config to tell the user whether a restart is still needed.
+const runtime = { host: null, port: null, discovery: false };
 
 const MIME = {
   '.mp4': 'video/mp4',
@@ -199,18 +204,41 @@ function createApp() {
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
 
-  // Same-origin API guard: refuse cross-site browser requests to this local server.
+  // Same-origin API guard: refuse cross-site browser requests to this server.
+  // A TV on the LAN loads the app from http://<lan-ip>:<port>, so "same host as
+  // this request" has to count as same-origin — otherwise every device would
+  // get a 403 on its very first API call.
   app.use('/api', (req, res, next) => {
     const origin = req.headers.origin;
     if (!origin) return next();
     try {
-      const host = new URL(origin).hostname;
-      if (['127.0.0.1', 'localhost', '::1'].includes(host)) return next();
+      const host = new URL(origin).host;
+      if (req.headers.host && host === req.headers.host) return next();
+      if (['127.0.0.1', 'localhost', '::1'].includes(new URL(origin).hostname)) return next();
     } catch {
       /* fall through */
     }
     res.status(403).json({ error: 'Cross-origin requests are not allowed' });
   });
+
+  /** What Settings and the TV app need to know about network access. */
+  function networkSummary() {
+    const cfg = config.get();
+    const lanAccess = cfg.server.lanAccess === true;
+    const boundToLan = runtime.host === '0.0.0.0';
+    const addresses = boundToLan ? discovery.lanAddresses() : [];
+    const port = runtime.port || cfg.server.port;
+    return {
+      lanAccess,
+      boundToLan,
+      discovery: runtime.discovery,
+      // The saved setting only takes effect on the next start.
+      restartRequired: lanAccess !== boundToLan,
+      port,
+      addresses,
+      urls: addresses.map((ip) => `http://${ip}:${port}`),
+    };
+  }
 
   function tmdbSummary() {
     const cfg = config.get();
@@ -244,6 +272,7 @@ function createApp() {
       scan: state.scan,
       epg: epg.summary(),
       mediaDirs: cfg.mediaDirs,
+      network: networkSummary(),
       playback: {
         ...playback,
         transcode: cfg.playback.transcode,
@@ -309,6 +338,11 @@ function createApp() {
             enabled: s.enabled !== false,
           })),
       };
+    }
+
+    // LAN access is a binding choice, so it only applies after a restart.
+    if (body.server && typeof body.server === 'object') {
+      patch.server = { lanAccess: body.server.lanAccess === true };
     }
 
     if (body.playback && typeof body.playback === 'object') {
@@ -907,8 +941,11 @@ function createApp() {
 
 function start({ port, host } = {}) {
   const cfg = config.get();
+  const lanAccess = cfg.server.lanAccess === true;
   const listenPort = port || cfg.server.port || 8090;
-  const listenHost = host || cfg.server.host || '127.0.0.1';
+  // Listening on 0.0.0.0 is what lets a TV on the same network reach the app at
+  // all; the loopback default stays for anyone who has not opted in.
+  const listenHost = host || (lanAccess ? '0.0.0.0' : cfg.server.host || '127.0.0.1');
   const instance = createApp();
 
   return new Promise((resolve, reject) => {
@@ -921,8 +958,31 @@ function start({ port, host } = {}) {
       server.once('listening', () => {
         const actual = server.address();
         const url = `http://${listenHost === '0.0.0.0' ? 'localhost' : listenHost}:${actual.port}`;
+        runtime.host = listenHost;
+        runtime.port = actual.port;
+
+        // Advertise on the LAN so the TV app can find this machine without
+        // anyone typing an IP address.
+        let listener = null;
+        if (lanAccess) {
+          listener = discovery.start({
+            port: actual.port,
+            version: require('../package.json').version,
+          });
+        }
+        runtime.discovery = Boolean(listener);
+        server.once('close', () => {
+          if (listener) listener.close();
+          runtime.host = null;
+          runtime.port = null;
+          runtime.discovery = false;
+        });
+
         instance.bootstrap();
-        resolve({ ...instance, server, url, port: actual.port });
+        const lanUrls = lanAccess
+          ? discovery.lanAddresses().map((ip) => `http://${ip}:${actual.port}`)
+          : [];
+        resolve({ ...instance, server, url, port: actual.port, host: listenHost, lanAccess, lanUrls });
       });
 
       // Another copy of ReelHouse may already own the default port.

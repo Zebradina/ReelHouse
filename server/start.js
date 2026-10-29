@@ -15,6 +15,11 @@ const { DIRS, APP_NAME } = require('./config');
     console.log(`\n  ${APP_NAME}`);
     console.log(`  ${line}`);
     console.log(`  Web app   ${instance.url}`);
+    if (instance.lanUrls && instance.lanUrls.length) {
+      console.log(`  On your network  ${instance.lanUrls.join(', ')}`);
+    } else {
+      console.log('  On your network  off — enable it in Settings → Devices');
+    }
     console.log(`  Data      ${DIRS.data}`);
     console.log(`  Library   ${instance.library.data.counts ? JSON.stringify(instance.library.data.counts) : 'not scanned'}`);
     console.log(`  ${line}`);

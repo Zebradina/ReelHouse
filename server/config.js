@@ -85,7 +85,13 @@ const DEFAULT_CONFIG = {
     // 720, 1080, or 0 to keep the source resolution.
     maxHeight: 1080,
   },
-  server: { port: 8090, host: '127.0.0.1' },
+  server: {
+    port: 8090,
+    host: '127.0.0.1',
+    // Bind to 0.0.0.0 and answer TV discovery probes on the LAN. Off by default:
+    // the library is served without a login, so exposing it is opt-in.
+    lanAccess: false,
+  },
 };
 
 function ensureDirs() {

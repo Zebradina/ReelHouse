@@ -1,0 +1,2 @@
+rootProject.name = 'ReelHouseTV'
+include ':app'

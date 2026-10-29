@@ -208,9 +208,56 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
+  android:
+    name: Android TV APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Build the TV app
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --console=plain
+
+      # The APK is the only artifact nobody can inspect by eye, so check that it
+      # is a real TV app: package id, a Leanback launcher entry, and a signature
+      # that a device will accept.
+      - name: Verify the APK
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          ls -l "$APK"
+          BADGING=$("$ANDROID_HOME"/build-tools/*/aapt2 dump badging "$APK")
+          echo "$BADGING" | head -6
+          echo "$BADGING" | grep -q "package: name='com.reelhouse.tv'"
+          echo "$BADGING" | grep -q "leanback-launchable-activity"
+          "$ANDROID_HOME"/build-tools/*/apksigner verify "$APK"
+
+      - name: Rename for the release
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          cp android/app/build/outputs/apk/release/app-release.apk "ReelHouse-$VERSION-tv.apk"
+          ls -l "ReelHouse-$VERSION-tv.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: ReelHouse-*-tv.apk
+          if-no-files-found: error
+
   release:
     name: Attach to release
-    needs: [macos, windows]
+    needs: [macos, windows, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -227,6 +274,7 @@ jobs:
             installers/macos-arm64/*.dmg
             installers/macos-x64/*.dmg
             installers/windows/*.exe
+            installers/android/*.apk
           overwrite_files: true
           fail_on_unmatched_files: true
 

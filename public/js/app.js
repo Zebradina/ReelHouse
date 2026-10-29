@@ -1644,6 +1644,7 @@ async function renderSettings() {
   const isDesktop = Boolean(window.reelhouseDesktop && window.reelhouseDesktop.pickFolder);
   const tmdbLinked = Boolean(config.tmdb.hasApiKey);
   const playbackStatus = status.playback || { ready: false, ffmpeg: null, ffprobe: null };
+  const network = status.network || { lanAccess: false, boundToLan: false, discovery: false, restartRequired: false, urls: [] };
   const tmdbLanguages = TMDB_LANGUAGES
     .map((code) => `<option value="${code}" ${config.tmdb.language === code ? 'selected' : ''}>${code}</option>`)
     .join('');
@@ -1834,6 +1835,38 @@ async function renderSettings() {
           <button class="btn btn-primary btn-sm" id="save-playback">Save playback settings</button>
           <span class="tiny muted">${playbackStatus.ready ? 'The player shows a “Transcoding” badge whenever it is converting.' : 'Install FFmpeg (brew install ffmpeg, winget install Gyan.FFmpeg) and restart to enable conversion.'}</span>
         </div>
+      </section>
+
+      <section class="settings-card" id="devices-card">
+        <div class="card-head">
+          <h2>TV &amp; devices</h2>
+          <span class="link-badge ${network.boundToLan && !network.restartRequired ? 'on' : ''}">
+            <span class="status-dot ${network.boundToLan && !network.restartRequired ? 'ok' : ''}"></span>
+            ${network.restartRequired ? 'Restart needed' : network.boundToLan ? 'On your network' : 'This machine only'}
+          </span>
+        </div>
+        <p>ReelHouse listens on this machine only by default. Turn network access on and the ReelHouse app on your TV finds it automatically over Wi-Fi — no addresses to type.</p>
+        <div class="field">
+          <label class="check-row" for="lan-access">
+            <input type="checkbox" id="lan-access" ${network.lanAccess ? 'checked' : ''} />
+            <span>Let devices on my network connect
+              <em>Anyone on this network can browse and play the library while this is on — there is no password.</em>
+            </span>
+          </label>
+        </div>
+        ${network.boundToLan
+          ? `<div class="kv">
+              ${(network.urls.length ? network.urls : ['Not on a network right now'])
+                .map((url) => `<div><span>Address</span><strong class="mono">${esc(url)}</strong></div>`)
+                .join('')}
+              <div><span>TV discovery</span><strong>${network.discovery ? 'Answering' : 'Not answering'}</strong></div>
+            </div>`
+          : ''}
+        ${network.restartRequired
+          ? `<p class="form-error">${network.lanAccess
+              ? 'Restart ReelHouse to start accepting devices on your network.'
+              : 'Restart ReelHouse to stop serving other devices — until then they can still connect.'}</p>`
+          : ''}
       </section>
 
       <section class="settings-card">
@@ -2120,6 +2153,23 @@ async function renderSettings() {
         }
       });
     }
+  }
+
+  const lanToggle = document.getElementById('lan-access');
+  if (lanToggle) {
+    lanToggle.addEventListener('change', async () => {
+      lanToggle.disabled = true;
+      const enabled = lanToggle.checked;
+      try {
+        await api.saveSettings({ server: { lanAccess: enabled } });
+        toast(enabled ? 'Network access on — restart ReelHouse to apply' : 'Network access off — restart ReelHouse to apply', 'success');
+        renderSettings();
+      } catch (err) {
+        lanToggle.checked = !enabled;
+        lanToggle.disabled = false;
+        toast(err.message, 'error');
+      }
+    });
   }
 
   const savePlayback = document.getElementById('save-playback');

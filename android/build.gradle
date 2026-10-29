@@ -1,0 +1,19 @@
+// ReelHouse TV — a thin Android TV client for a ReelHouse server on the same
+// network. It finds the server by UDP discovery, then loads the web app in a
+// WebView with a 10-foot UI shim so a remote can drive it.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}

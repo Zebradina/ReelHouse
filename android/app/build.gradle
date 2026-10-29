@@ -1,0 +1,39 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.reelhouse.tv'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.reelhouse.tv'
+        // Android TV boxes are often several years old; 21 covers them.
+        minSdk 21
+        targetSdk 34
+        versionCode 160
+        versionName '1.6.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Sideloaded TV app: the debug key keeps `adb install -r` working
+            // between local builds without asking anyone for a keystore.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    // BuildConfig.VERSION_NAME is reported in the WebView user agent, so the
+    // server can tell a TV client from a browser.
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}

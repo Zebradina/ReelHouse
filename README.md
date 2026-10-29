@@ -24,7 +24,8 @@ Nothing leaves your computer. ReelHouse does not copy your media, does not trans
 | **Discover** | Trending and popular movies/TV from TMDB, with the services streaming each title in your region and links to watch them |
 | **Search** | Instant search across movies, shows and the guide |
 | **Desktop apps** | Electron shell boots the service in-process, native folder picker, menu shortcuts, macOS `.dmg` / Windows `.exe` |
-| **Local only** | Binds to `127.0.0.1`, cross-origin requests rejected, TMDB key stored with `0600` permissions |
+| **Android TV** | Sideloadable APK that finds the server on your Wi-Fi and runs the same interface with a remote, no address typing |
+| **Local by default** | Binds to `127.0.0.1`; network access is a switch in Settings, cross-origin requests are rejected, TMDB key stored with `0600` permissions |
 
 The TV guide shows the schedule you supply. ReelHouse is not an IPTV player and ships no channel feeds — add an XMLTV source (your provider, or a freely published guide) in Settings.
 
@@ -101,6 +102,7 @@ Pushing a `v*` tag builds every installer on GitHub Actions and attaches it to t
 | macOS arm64 | `macos-15` | `ReelHouse-<version>-arm64.dmg` |
 | macOS Intel | `macos-15-intel` | `ReelHouse-<version>.dmg` |
 | Windows x64 | `windows-latest` | `ReelHouse Setup <version>.exe` + portable `.exe` |
+| Android TV | `ubuntu-latest` | `ReelHouse-<version>-tv.apk` |
 
 To rebuild the assets of a release that already exists: `gh workflow run installers.yml -f tag=v1.6.0`.
 
@@ -149,6 +151,38 @@ Notarisation needs a paid Apple Developer Program membership and a **Developer I
 
 ---
 
+## Android TV
+
+`android/` holds a small Android app for a TV or a streaming box. It runs the same web interface as the desktop app in a WebView, so the library, guide, Discover and player are all there, plus the two things a remote needs: a connect screen and a focus ring that can be driven with arrow keys and OK.
+
+Grab `ReelHouse-<version>-tv.apk` from [Releases](../../releases) and install it either way:
+
+```bash
+adb connect 192.168.1.42:5555          # if the TV has network debugging on
+adb install -r ReelHouse-1.6.0-tv.apk
+```
+
+or copy the APK to the TV and open it with a file manager or the Downloader app. Android 5.0 (API 21) or newer, TV and server on the same network.
+
+**Turn network access on first.** The server only listens on `127.0.0.1` until you do: Settings → TV & devices → *Let devices on my network connect*, then restart ReelHouse. It rebinds to all interfaces and starts answering discovery probes on UDP 8090, and the card then shows the address to type if your router blocks broadcast.
+
+How the TV finds it:
+
+- the app broadcasts `REELHOUSE/1 DISCOVER` to UDP 8090–8093 (the server shifts port if 8090 is taken)
+- the server replies with its LAN addresses, and the app confirms each one with `GET /api/status` before offering it, so a stale reply or a different app on that port never appears
+- the last server is remembered, so the next launch is one OK press; Back from the browser returns to the connect screen to pick another
+
+There is no login. Anyone who can reach the port can browse and play the library — that is why network access is a switch rather than the default.
+
+Limitations worth knowing:
+
+- It is a WebView, not a native player: no surround passthrough, and a TV whose system WebView is years out of date may not decode H.264 in MKV. Those files still play, because the server converts them, at the cost of CPU.
+- The 10-foot treatment is a focus ring, larger type and OK-to-open on cards — the layout is otherwise the desktop layout.
+- The APK is signed with a debug key so sideloading works; if that key changes between builds, the TV will ask you to uninstall the old app before installing the new one.
+- Building it locally needs a JDK 17 and the Android SDK: `cd android && ./gradlew assembleRelease`.
+
+---
+
 ## Configuration
 
 Settings (and the equivalent `config.json`) covers:
@@ -180,6 +214,8 @@ artcache/          downloaded TMDB artwork (served offline afterwards)
 ```
 
 Set `REELHOUSE_DATA=/some/path` to use a different directory, or `PORT=9000` to change the port. If the port is busy the server moves to the next free one automatically.
+
+`server.lanAccess` (Settings → TV & devices) decides whether the server listens on `127.0.0.1` or on every interface so devices on your network — a TV, a phone — can reach it. It is off until you turn it on, only takes effect after a restart, and is what the Android TV app's discovery depends on.
 
 ---
 
@@ -284,8 +320,14 @@ All endpoints are served by the local service; the UI uses nothing else.
 ## Project layout
 
 ```
+android/                     Android TV client (Gradle project, no app dependencies)
+  app/src/main/java/…/ConnectActivity.java   Server discovery + manual address
+  app/src/main/java/…/BrowserActivity.java   WebView host: fullscreen video, Back handling
+  app/src/main/java/…/Discovery.java         UDP probe, /api/status verification
+  app/src/main/assets/tv-shim.js             Focus ring + OK-to-open, injected per page
 server/
   index.js      Express app: API, streaming, artwork cache, scan orchestration
+  discovery.js  UDP responder the TV app looks for on the LAN
   config.js     Data dir + persisted settings
   store.js      Atomic JSON store with coalesced writes
   tmdb.js       Cached TMDB client (v3 key or v4 token), artwork helper
