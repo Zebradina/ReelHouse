@@ -258,11 +258,14 @@ jobs:
         run: |
           APK=android/app/build/outputs/apk/release/app-release.apk
           ls -l "$APK"
-          BADGING=$("$ANDROID_HOME"/build-tools/*/aapt2 dump badging "$APK")
+          # Pin the build-tools version: the image ships several, and a glob
+          # would pass the second path to aapt2 as a subcommand.
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/34.0.0"
+          BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$APK")
           echo "$BADGING" | head -6
           echo "$BADGING" | grep -q "package: name='com.reelhouse.tv'"
           echo "$BADGING" | grep -q "leanback-launchable-activity"
-          "$ANDROID_HOME"/build-tools/*/apksigner verify "$APK"
+          "$BUILD_TOOLS/apksigner" verify "$APK"
 
       - name: Rename for the release
         run: |
