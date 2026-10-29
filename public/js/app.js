@@ -381,7 +381,13 @@ function mountHero(items) {
   const restart = () => {
     if (state.heroTimer) clearInterval(state.heroTimer);
     if (items.length < 2) return;
-    state.heroTimer = setInterval(() => paint((index + 1) % items.length), 9000);
+    state.heroTimer = setInterval(() => {
+      // Rotating replaces the slide's DOM, which destroys the Play button. On a
+      // TV the button may be the focused element, and taking it away drops focus
+      // to <body> — so never rotate while the viewer is inside the hero.
+      if (hero.contains(document.activeElement)) return;
+      paint((index + 1) % items.length);
+    }, 9000);
   };
   restart();
 }

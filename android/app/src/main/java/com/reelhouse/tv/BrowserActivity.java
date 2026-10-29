@@ -2,6 +2,7 @@ package com.reelhouse.tv;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.KeyEvent;
@@ -121,6 +122,15 @@ public class BrowserActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setUserAgentString(settings.getUserAgentString() + " ReelHouseTV/" + BuildConfig.VERSION_NAME);
+
+        /*
+         * Chrome DevTools access, in debuggable builds only. Debugging a TV app
+         * without it means guessing at the page from screenshots; the release
+         * APK keeps it off so nobody can attach to a viewer's session.
+         */
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
     }
 
     private void immersive() {
