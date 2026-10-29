@@ -139,3 +139,29 @@ jobs:
             installers/windows/*.exe
           overwrite_files: true
           fail_on_unmatched_files: true
+
+      # Checksums are computed from the exact bytes being published and replace
+      # any earlier block, so re-running a release never stacks duplicates.
+      - name: Publish SHA-256 checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          : > SHA256SUMS.txt
+          for file in installers/*/*; do
+            [ -f "$file" ] || continue
+            printf '%s  %s\n' "$(sha256sum "$file" | cut -d' ' -f1)" "$(basename "$file")"
+          done | sort -k2 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+          {
+            printf '\n## SHA-256 checksums\n\n```\n'
+            cat SHA256SUMS.txt
+            printf '```\n\nVerify before installing: `shasum -a 256 <file>` on macOS, `certutil -hashfile <file> SHA256` on Windows.\n'
+          } > CHECKSUMS.md
+
+          gh release view "$TAG" --json body -q .body \
+            | awk '/^## SHA-256 checksums$/{exit} {print}' > BODY.md
+          cat CHECKSUMS.md >> BODY.md
+          gh release edit "$TAG" --notes-file BODY.md
+          gh release upload "$TAG" SHA256SUMS.txt --clobber
