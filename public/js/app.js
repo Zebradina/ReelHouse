@@ -1724,7 +1724,9 @@ async function renderLive(channelId) {
   subEl.textContent = [info.group, 'Live TV'].filter(Boolean).join(' · ');
 
   const Hls = window.Hls;
+  const Dash = window.dashjs;
   let controller = null;
+  let dashPlayer = null;
   let fellBack = false;
 
   const useNative = () => {
@@ -1732,7 +1734,21 @@ async function renderLive(channelId) {
     video.play().catch(() => {});
   };
 
-  if (info.kind === 'hls' && Hls && Hls.isSupported()) {
+  if (info.kind === 'dash' && Dash) {
+    dashPlayer = Dash.MediaPlayer().create();
+    // CMCD is viewer analytics for broadcaster dashboards; it only produces a
+    // console warning here, because the manifest is served from the proxy.
+    dashPlayer.updateSettings({ streaming: { cmcd: { enabled: false } } });
+    dashPlayer.on(Dash.MediaPlayer.events.ERROR, (event) => {
+      const detail = (event && event.error && (event.error.message || event.error.code)) || 'the stream stopped';
+      fail(`This channel could not be played (${detail}).`);
+    });
+    // The manifest is already proxied and its segment URLs rewritten by the
+    // server, so dash.js talks to this origin and nothing else.
+    dashPlayer.initialize(video, info.url, true);
+  } else if (info.kind === 'dash') {
+    fail('This channel is MPEG-DASH but the DASH player did not load, so it cannot be opened. Restart ReelHouse and try again.');
+  } else if (info.kind === 'hls' && Hls && Hls.isSupported()) {
     controller = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 30 });
     controller.loadSource(info.url);
     controller.attachMedia(video);
@@ -1760,6 +1776,10 @@ async function renderLive(channelId) {
     if (controller) {
       controller.destroy();
       controller = null;
+    }
+    if (dashPlayer) {
+      try { dashPlayer.reset(); } catch { /* already gone */ }
+      dashPlayer = null;
     }
     video.removeAttribute('src');
     video.load();
@@ -2030,7 +2050,7 @@ async function renderSettings() {
             ${liveStatus.channelCount ? `${liveStatus.channelCount} channels` : 'No channels'}
           </span>
         </div>
-        <p>Add an M3U/M3U8 playlist from your IPTV provider (or a path to a playlist file). Its channels appear in the TV Guide with a play button and stream live when you press it.</p>
+        <p>Add an M3U/M3U8 playlist from your IPTV provider (or a path to a playlist file). Its channels appear in the TV Guide with a play button and stream live when you press it. The free-to-air UK list below is free channels only — no subscription service offers one, so a paid channel has to come from a playlist you are entitled to.</p>
         <div id="live-rows">${liveRows}</div>
         <div class="row-actions" style="margin-top:10px">
           <button class="btn btn-quiet" id="add-live">+ Add playlist</button>

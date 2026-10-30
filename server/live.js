@@ -33,6 +33,36 @@ function redact(value) {
   return String(value || '').replace(SECRET_QUERY, '$1***');
 }
 
+/** Playlists decorate names with these: "BBC One East (720p) [Geo-blocked]". */
+const QUALITY = /\(\s*(?:\d{3,4}[pi]|sd|hd|fhd|uhd|4k)\s*\)/gi;
+const STATUS_TAG = /\[[^\]]*\]/g;
+
+/**
+ * `BBC One East (720p) [Geo-blocked]` -> `BBC One East`
+ *
+ * The quality and status decorations are a per-stream detail, not part of the
+ * name, and in a narrow guide column they crowd out the part that identifies
+ * the channel. Other parenthesised text is left alone — "Channel 4 (+1)" is
+ * a different channel, not a resolution.
+ */
+function cleanName(value) {
+  return String(value || '')
+    .replace(QUALITY, ' ')
+    .replace(STATUS_TAG, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * `BBCOne.uk@London` -> `BBCOne.uk`
+ *
+ * iptv-org qualifies an id per stream (region, quality), but XMLTV publishes the
+ * station id alone, so the qualifier has to go or no guide would ever match.
+ */
+function baseId(value) {
+  return String(value || '').trim().replace(/@[A-Za-z0-9_]+$/, '');
+}
+
 /** `BBC One HD` -> `bbc-one-hd`, for channels that carry no tvg-id. */
 function slug(value) {
   return String(value || '')
@@ -82,7 +112,7 @@ function parsePlaylist(text, { sourceName = '' } = {}) {
     if (line.startsWith('#')) continue;
     if (!pending) continue;
 
-    let name = pending.attrs['tvg-name'] || pending.title || pending.attrs['tvg-id'] || 'Unnamed channel';
+    let name = cleanName(pending.attrs['tvg-name'] || pending.title || pending.attrs['tvg-id']) || 'Unnamed channel';
     // Many playlists prefix the name with the channel number ("101 BBC One").
     // The number belongs in the number slot, not in front of the name in a
     // guide column that is only wide enough for the name.
@@ -92,7 +122,7 @@ function parsePlaylist(text, { sourceName = '' } = {}) {
       lead = numbered[1];
       name = numbered[2].trim();
     }
-    let id = (pending.attrs['tvg-id'] || '').trim() || slug(name) || `channel-${channels.length + 1}`;
+    let id = baseId(pending.attrs['tvg-id']) || slug(name) || `channel-${channels.length + 1}`;
     // A playlist may repeat a tvg-id (regional feeds); ids have to stay unique
     // because they are what the guide and the player address channels by.
     if (used.has(id)) {
@@ -106,7 +136,7 @@ function parsePlaylist(text, { sourceName = '' } = {}) {
       id,
       name,
       url: line,
-      tvgId: pending.attrs['tvg-id'] || null,
+      tvgId: baseId(pending.attrs['tvg-id']) || null,
       icon: pending.attrs['tvg-logo'] || null,
       group: pending.attrs['group-title'] || null,
       number: String(pending.attrs['tvg-chno'] || lead || channels.length + 1),
@@ -167,6 +197,38 @@ function rewritePlaylist(text, baseUrl) {
       return wrap(line);
     })
     .join('\n');
+}
+
+/** Attributes that carry a segment URL inside an MPEG-DASH manifest. */
+const DASH_URL_ATTR = /\b(media|initialization|index|sourceURL|bitstreamSwitching)="([^"]*)"/g;
+
+/**
+ * Point every segment URL in an MPD at the local proxy.
+ *
+ * DASH resolves segment URLs against the manifest's own location, but the browser
+ * only ever sees the proxy URL, so relative paths and `$Time$` templates would
+ * either 404 or go straight to the provider without CORS headers. Each one is
+ * made absolute against the manifest first, then wrapped.
+ *
+ * The `$` placeholders have to survive the round trip: encodeURIComponent would
+ * turn `$Time$` into `%24Time%24` and dash.js would have nothing left to expand,
+ * so they are put back after encoding.
+ */
+function rewriteManifest(xml, baseUrl, origin) {
+  const prefix = `${String(origin || '').replace(/\/+$/, '')}/api/live/proxy?u=`;
+
+  const wrap = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw || /^(data|blob):/i.test(raw)) return value;
+    try {
+      const absolute = new URL(raw, baseUrl).toString();
+      return prefix + encodeURIComponent(absolute).replace(/%24/g, '$');
+    } catch {
+      return value;
+    }
+  };
+
+  return String(xml || '').replace(DASH_URL_ATTR, (_all, name, value) => `${name}="${wrap(value)}"`);
 }
 
 class Live {
@@ -250,4 +312,4 @@ class Live {
   }
 }
 
-module.exports = { Live, parsePlaylist, rewritePlaylist, redact };
+module.exports = { Live, parsePlaylist, rewritePlaylist, rewriteManifest, redact };

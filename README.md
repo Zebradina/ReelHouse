@@ -15,7 +15,7 @@ Nothing leaves your computer. ReelHouse does not copy your media, does not trans
 | **Movies** | Folder scan, filename/year parsing, TMDB posters, banners, logos, synopsis, runtime, rating, genres |
 | **TV Shows** | Show → season → episode structure from `S01E02` names, episode stills, titles, air dates, season selector |
 | **TV Guide (EPG)** | XMLTV files or URLs, multi-source merge, scrollable timeline, live "now" line, day navigation, programme details |
-| **Live TV (M3U)** | Point Settings at one or more M3U/M3U8 playlists and their channels join the guide with a play button; HLS is proxied through the server so CORS and credentials stay off the browser |
+| **Live TV (M3U)** | Free-to-air UK channels out of the box, plus any M3U/M3U8 playlist of your own; channels join the guide with a play button, and both HLS and MPEG-DASH streams are proxied through the server so CORS and credentials stay off the browser |
 | **Banners** | Widescreen TMDB backdrops on the home hero carousel, movie/series detail pages, and "On TV now" cards |
 | **Player** | HTML5 player with byte-range streaming (seek anywhere instantly), resume position, progress bars everywhere |
 | **Codecs** | MKV, AVI, HEVC, MPEG-2/4, WMV/VC-1, DTS, AC-3, TrueHD and everything else FFmpeg opens — converted to H.264/AAC on demand, only when the browser needs it |
@@ -28,7 +28,7 @@ Nothing leaves your computer. ReelHouse does not copy your media, does not trans
 | **Android TV** | Sideloadable APK that finds the server on your Wi-Fi and runs the same interface with a remote, no address typing |
 | **Local by default** | Binds to `127.0.0.1`; network access is a switch in Settings, cross-origin requests are rejected, TMDB key stored with `0600` permissions |
 
-The TV guide shows the schedule you supply. ReelHouse ships no channel feeds of its own: add an XMLTV source for the listings and, if you want to watch, an M3U playlist for the streams — both in Settings. A guide without a playlist still works as a schedule; a playlist without a guide still plays, it just has no programmes in the timeline.
+The TV guide shows the schedule you supply: add an XMLTV source in Settings for the listings. For the streams, ReelHouse starts with a free-to-air playlist already configured ([iptv-org](https://github.com/iptv-org/iptv)'s UK list — free channels only, no subscription content), and you can add your own M3U alongside it. A guide without a playlist still works as a schedule; a playlist without a guide still plays, it just has no programmes in the timeline.
 
 ---
 
@@ -263,7 +263,9 @@ Discover needs a linked TMDB key. Without one the tab explains how to link it. T
 
 ### Live TV
 
-**Settings → Live TV (M3U)** takes any number of playlists — an IPTV provider's `http(s)` link, or a path to a `.m3u` file on this machine. Channels appear in the guide in playlist order with a ▶ button; press it (or a programme on that channel) to watch. The list is refreshed when you save and via **Refresh channels now**.
+**Settings → Live TV (M3U)** takes any number of playlists — an IPTV provider's `http(s)` link, or a path to a `.m3u` file on this machine. A new install starts with **Free UK channels (iptv-org)**, a free-to-air list, already filled in; it is an ordinary playlist, so remove it or add others beside it. Channels appear in the guide in playlist order with a ▶ button; press it (or a programme on that channel) to watch. The list is refreshed when you save, on launch, and via **Refresh channels now**.
+
+Nothing here unlocks paid television. iptv-org indexes streams broadcasters publish openly, so it carries free channels (Pluto TV, Red Bull TV, TalkTV, the BBC's free feeds where they are not geo-blocked) and no Sky, TNT Sports or other subscription channels. Those are DRM-protected inside their own apps and have no playlist to point at. Free lists are also a moving target: entries drop out as broadcasters rotate URLs, and some channels only work from the country they broadcast in.
 
 Channels are matched to guide data by `tvg-id` first and channel name second, so a playlist entry inherits the station's programmes. Names that repeat the channel number (`101 BBC One`) are split, leaving the number in the guide's number column.
 
@@ -272,6 +274,10 @@ Saving a playlist stores its URL in `config.json` (mode `0600`) — provider lin
 Playback goes through `/api/live/proxy`, which fetches the stream server-side and rewrites HLS playlists so variants, keys and segments all come back through ReelHouse. That is what makes provider streams work at all: they rarely send CORS headers, and the relative segment paths only resolve against the playlist's own URL. A provider that requires a specific `User-Agent` or referer may still refuse; those are not spoofed.
 
 Live channels are streams, not files: there is no resume, no transcoding and no next-episode — a channel that fails to open shows the player's error rather than a converted fallback.
+
+Both stream formats work. HLS (`.m3u8`) goes through hls.js, MPEG-DASH (`.mpd`) through dash.js, and the server picks by URL. DASH needs its own kind of rewriting: its segment URLs resolve against the manifest's own location and its `$Time$` templates expand at playback time, so the proxy turns each one into an absolute proxy URL while leaving the placeholders intact for the player to fill in. Around a fifth of the free UK list is DASH, most of the BBC feeds among them.
+
+The codec still matters: DASH and HLS only decide the packaging, not the video inside. The free list mixes H.264 with HEVC, and an HEVC feed plays only where the browser can decode it — on a machine without hardware HEVC support the channel reports an error instead of playing.
 
 ### Up next
 

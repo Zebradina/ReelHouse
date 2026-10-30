@@ -45,7 +45,20 @@ const DIRS = {
 
 const home = os.homedir();
 // Bumped when a default needs to reach existing installs (see load()).
-const CONFIG_VERSION = 2;
+const CONFIG_VERSION = 3;
+
+/**
+ * Free-to-air UK channels, so a fresh install has something in the guide before
+ * the user has found a playlist of their own. iptv-org only indexes streams the
+ * broadcaster publishes publicly — there is no subscription content in it, so
+ * no Sky, BT Sport or other paid channels.
+ */
+const FREE_UK_CHANNELS = {
+  id: 'preset-free-uk',
+  name: 'Free UK channels (iptv-org)',
+  url: 'https://iptv-org.github.io/iptv/countries/uk.m3u',
+  enabled: true,
+};
 
 const DEFAULT_CONFIG = {
   version: CONFIG_VERSION,
@@ -70,7 +83,7 @@ const DEFAULT_CONFIG = {
   },
   live: {
     // { id, name, url (M3U playlist, path or URL), enabled }
-    sources: [],
+    sources: [{ ...FREE_UK_CHANNELS }],
     refreshHours: 6,
   },
   scanOnStart: true,
@@ -143,6 +156,15 @@ function load() {
     config.videoExtensions = [...DEFAULT_CONFIG.videoExtensions];
     config.version = CONFIG_VERSION;
   }
+  // Installs that predate live TV have no playlist at all, so the free channels
+  // reach them too — unless they already added that playlist themselves.
+  if (Number(saved.version || 1) < 3) {
+    const sources = config.live.sources || [];
+    if (!sources.some((source) => source.url === FREE_UK_CHANNELS.url)) {
+      config.live.sources = [{ ...FREE_UK_CHANNELS }, ...sources];
+    }
+    config.version = CONFIG_VERSION;
+  }
   if (process.env.PORT) config.server.port = Number(process.env.PORT) || config.server.port;
   return config;
 }
@@ -173,4 +195,15 @@ function publicConfig() {
   };
 }
 
-module.exports = { APP_NAME, DIRS, DEFAULT_CONFIG, load, get, save, publicConfig, ensureDirs, platformDataDir };
+module.exports = {
+  APP_NAME,
+  DIRS,
+  DEFAULT_CONFIG,
+  FREE_UK_CHANNELS,
+  load,
+  get,
+  save,
+  publicConfig,
+  ensureDirs,
+  platformDataDir,
+};

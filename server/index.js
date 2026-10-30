@@ -11,7 +11,7 @@ const { Store } = require('./store');
 const { Tmdb, IMAGE_ROOT } = require('./tmdb');
 const { Scanner } = require('./scanner');
 const { Epg } = require('./epg');
-const { Live, rewritePlaylist } = require('./live');
+const { Live, rewritePlaylist, rewriteManifest } = require('./live');
 const { discoverSubtitles, toVtt, decode } = require('./subtitles');
 const transcode = require('./transcode');
 const discovery = require('./discovery');
@@ -97,6 +97,9 @@ function normaliseChannelName(name) {
 function liveKind(url) {
   const clean = String(url || '').split('?')[0].toLowerCase();
   if (/\.m3u8$/.test(clean)) return 'hls';
+  // MPEG-DASH needs its own manifest parser and MSE pipeline, so it must not be
+  // handed to hls.js — that only produces a misleading parse error.
+  if (/\.mpd$/.test(clean)) return 'dash';
   if (/\.(mp4|m4v|webm|ogv|mp3|aac|ts)$/.test(clean)) return 'file';
   return 'hls';
 }
@@ -1087,11 +1090,22 @@ function createApp() {
       clearTimeout(timer);
 
       const type = String(upstream.headers.get('content-type') || '').toLowerCase();
-      if (/mpegurl/.test(type) || /\.m3u8$/i.test(target.pathname)) {
+      if (upstream.ok && (/mpegurl/.test(type) || /\.m3u8$/i.test(target.pathname))) {
         const text = await upstream.text();
         res.setHeader('content-type', 'application/vnd.apple.mpegurl');
         res.setHeader('cache-control', 'no-store');
         return res.send(rewritePlaylist(text, target.toString()));
+      }
+
+      // MPEG-DASH. The origin is taken from the request so the segment URLs
+      // dash.js builds point back at whichever host the browser is using — the
+      // same rewrite has to work for localhost and for a TV on the LAN.
+      if (upstream.ok && (/dash\+xml/.test(type) || /\.mpd$/i.test(target.pathname))) {
+        const text = await upstream.text();
+        const origin = `${req.protocol}://${req.get('host')}`;
+        res.setHeader('content-type', 'application/dash+xml');
+        res.setHeader('cache-control', 'no-store');
+        return res.send(rewriteManifest(text, target.toString(), origin));
       }
 
       res.status(upstream.status);
@@ -1126,6 +1140,15 @@ function createApp() {
   app.get('/vendor/hls.min.js', (req, res) => {
     const file = path.join(APP_ROOT, 'node_modules', 'hls.js', 'dist', 'hls.min.js');
     if (!fs.existsSync(file)) return res.status(404).type('text/plain').send('hls.js is not installed');
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return fs.createReadStream(file).pipe(res);
+  });
+
+  // dash.js, for the MPEG-DASH live channels that HLS-only players cannot open.
+  app.get('/vendor/dash.all.min.js', (req, res) => {
+    const file = path.join(APP_ROOT, 'node_modules', 'dashjs', 'dist', 'modern', 'umd', 'dash.all.min.js');
+    if (!fs.existsSync(file)) return res.status(404).type('text/plain').send('dash.js is not installed');
     res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
     return fs.createReadStream(file).pipe(res);
